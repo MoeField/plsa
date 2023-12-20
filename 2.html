@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <script type="text/javascript" src="./js/echarts/echarts.min.js"></script>
+  <meta charset="utf-8" />
+  <title>生理信号采集</title>
+  <script>
+    window.onload = function isSerialAv() {
+      if ("serial" in navigator) {console.log("Web Serial API is supported");}
+      else{ alert("Web Serial API 不被支持,请确认使用Chrome内核的浏览器"); }};
+
+    function stringToHex(str){
+      let val="";
+      for(let i = 0; i < str.length; i++){
+        if(val == ""){val = str.charCodeAt(i).toString(16);
+        }else{val += "," + str.charCodeAt(i).toString(16);}
+      }return val;}
+      
+    function arrToHex(arr) {
+        return arr.reduce((accu, item) => {
+        let a = item.toString(16)
+        if (a.length < 2) a = "0" + a
+        a=a.toUpperCase()
+        return accu += (a+",")}, "")}
+
+  </script>
+</head>
+
+<body>
+  <h1>呼吸波</h1>
+  <div id="comReader">
+    <h3>USB串口读取</h3>
+
+    <script>
+    //全局变量和数据结构
+      var isRreading = false;//读取控制
+      var doShift = true;//是否只展示后面一段定长的数据(而非全部采集数据)
+      var displaysize=256;//定长数据量
+      
+      var comQueue = [];//串口数据缓存
+      
+      var HeartWaveData=[];
+      var BreatheWaveData=[];
+      
+      const mxMem=65536;
+      
+      
+      const minPacksize=10;
+      function stackReader(){//把数据从串口数据队列搬到处理后的数据队列
+        if(comQueue.length<minPacksize){return;}//不够长就呆会再试
+        
+        while(comQueue.shift()!=0x53){console.log("ShiftingToPkgStart");}
+        if(comQueue.shift()==0x59){
+          let control = comQueue.shift();
+          let command = comQueue.shift();
+          let xxHigh = comQueue.shift();
+          let xxLow = comQueue.shift();
+          let packSize = xxHigh*0x100+xxLow;
+          let t_data = [];
+          for(let i=0;i<packSize;i++){t_data.push(comQueue.shift());}
+          comQueue.shift();//去除校验码
+          if(comQueue.shift()==0x54&&comQueue.shift()==0x43){
+              if(command==0x02){
+                  if(control==0x85){//心率
+                      hR.innerHTML=t_data[0];
+                      HeartWaveData.push(t_data[0]);
+                  }
+                  if(control==0x81){//呼吸
+                      bR.innerHTML=t_data[0];
+                      BreatheWaveData.push(t_data[0]);
+                  }
+              }
+              if(command==0x05){
+                  if(control==0x85){//心率
+                      for(let i=0;i<5;i++){
+                          HeartWaveData.push(t_data[i]);
+                  }}
+                  if(control==0x81){//呼吸
+                      for(let i=0;i<5;i++){
+                          BreatheWaveData.push(t_data[i]);
+                  }}
+              }
+          }else{console.log("unExpectedPackEnd");}
+        }else{console.log("unExpectedData");}
+      }
+      comQueue_Reader = setInterval(stackReader,10);//10ms
+    </script>
+    
+    <div class="Controller">
+        <!--数据读取控制按钮-->
+        <button onclick="readFromSerialPort()">读取</button>
+        <script>//--------------------------------接受串口数据--------------------------------------//
+            async function readFromSerialPort() {
+                var serial = navigator.serial;  //从选择列表获取串口对象
+                var port = await serial.requestPort();//打开串口
+                isRreading = true;
+                await port.open({
+                    baudRate: 115200,
+                    bufferSize: 512,
+                    stopBits:1,
+                    dataBits:8,
+                    parity:"none"
+                });//设置串口参数
+                
+                
+                //发送控制信息，要求设备主动上传
+                var writer = port.writable.getWriter();
+                var reader = port.readable.getReader();//创建数据流读取器
+                //发送0x53,0x59,0x01,0x02,0x00,0x01,0x0F,0xBF,0x54,0x43
+                //await writer.write(Uint8Array.of(0x53,0x59,0x01,0x02,0x00,0x01,0x0F,0xBF,0x54,0x43));
+                //开心率
+                await writer.write(Uint8Array.of(0x53,0x59,0x85,0x00,0x00,0x01,0x01,0x33,0x54,0x43));
+                //开呼吸
+                await writer.write(Uint8Array.of(0x53,0x59,0x81,0x00,0x00,0x01,0x01,0x2F,0x54,0x43));
+                //await writer.write();
+                await writer.close();
+                
+                //读取数据，直到isRreading被置为false
+                while (isRreading) {//把接收到的数据压进队列
+                  var { value, done } = await reader.read();
+                  if (value) { //comQueue = comQueue.concat(value);
+                    console.log(arrToHex(value));
+                    for(let i=0;i<value.length;i++){ comQueue.push(value[i]);}
+                  }
+                };
+                reader.releaseLock();//释放资源，关闭串口
+                await port.close();
+              }
+        </script>
+
+        <button onclick="stopSerialPort()">停止</button>
+        <button onclick="clc()">清除记录数据</button>
+        <button onclick="cls()">清屏(串口)</button>
+        <button onclick="toggleShift()">toggleShift</button><wbr>
+        <script>
+            var rawDatDp;// = document.getElementById("serialData");//在下面，用于显示原始数据
+            function toggleShift(){doShift =! doShift;}
+            function clc(){ dpHData=[];dpBData=[];}
+            function cls(){ rawDatDp.innerHTML = "";}
+            function stopSerialPort(){isRreading = false;}
+        </script>
+
+        <input type="range" id="dpsize" name="dpsize" value="256" min="64" max="512" step="64" />
+        <label for="volume">Display Size: </label><span id="showSize"></span>
+        <script>
+            var slider = document.getElementById("dpsize");
+            var dpSize = document.getElementById("showSize");
+            dpSize.innerHTML = slider.valueAsNumber;
+            slider.oninput = function() {
+              displaysize = this.value;
+              dpSize.innerHTML = slider.valueAsNumber;
+            }
+        </script>
+    </div>
+<!--=============================================================================================================-->
+    <div class="chartDisplayer">
+        <div id="directValue"><b>呼吸频率</b><span id="bR">-1</span><br/><b>心率</b><span id="hR">-1</span></div>
+        <script>
+            var bR=document.getElementById("bR");
+            var hR=document.getElementById("hR");
+        </script>
+        <!--脉搏波图表-->
+        <div id="chartBreathe" style="width: 90%;height:400px;"></div>
+        <div id="chartHeart" style="width: 90%;height:400px;"></div>
+        <script>
+          var chartB = echarts.init(document.getElementById('chartBreathe'));
+          var optionB = {// 设置图表的基本配置
+            animation: false,
+            title: { text: 'Breathe Waveform' },
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['呼吸波形'] },
+            xAxis: { data: [] },
+            yAxis: { type: 'value', min: 0, max: 63 },
+            series: [{ name: '值', type: 'line', data: [] }]
+          };
+          chartB.setOption(optionB);// 设置图表的初始数据
+          
+          var chartH = echarts.init(document.getElementById('chartHeart'));
+          
+          var optionH = {// 设置图表的基本配置
+            animation: false,
+            title: { text: 'Heart Waveform' },
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['心率波形'] },
+            xAxis: { data: [] },
+            yAxis: { type: 'value', min: 0, max: 255 },
+            series: [{ name: '值', type: 'line', data: [] }]
+          };
+          chartH.setOption(optionH);// 设置图表的初始数据
+          
+          // 定义一个函数updateData，用来每隔0.1秒从更新图表的数据和视图
+          const sampRate = 1;
+          function updateData() {
+            let dpHData=[];
+            let dpBData=[];
+            let dpSecH=[];
+            let dpSecB=[];
+            for(let i=0;i<HeartWaveData.length;i++){dpSecH.push(i/sampRate);}
+            for(let i=0;i<BreatheWaveData.length;i++){dpSecB.push(i/sampRate);}
+            //dpData=FILTER(dpData);
+            if(doShift){
+                let startH=HeartWaveData.length-displaysize;
+                if(startH<0){ startH=0; }
+                dpHData=HeartWaveData.slice(startH,HeartWaveData.length);
+                dpSecH=dpSecH.slice(startH,HeartWaveData.length);
+                
+                let startB=BreatheWaveData.length-displaysize;
+                if(startB<0){ startB=0; }
+                dpBData=BreatheWaveData.slice(startB,BreatheWaveData.length);
+                dpSecB=dpSecB.slice(startB,BreatheWaveData.length);
+            }
+            
+            else{ dpBData = BreatheWaveData; dpHData = HeartWaveData; }
+            // 更新图表的x轴和y轴的数据
+            chartB.setOption({
+              xAxis:{data: dpSecB},
+              series: [{data: dpBData}]
+            });
+            chartH.setOption({
+              xAxis:{data: dpSecH},
+              series: [{data: dpHData}]
+            });
+          }
+          // 每过一小段时间 调用updateData函数，更新显示实时心率数据
+          flashData = setInterval(updateData, 100);//100ms
+          window.addEventListener('resize', chartBreathe.resize);
+          window.addEventListener('resize', chartHeart.resize);
+        </script>
+    </div><hr>
+<!--=============================================================================================================-->
+    <marquee id="serialData" direction="up" behavior="slide" scrollamount="30" 
+    height="120" bgcolor="#EEEEEE" hspace="10" vspace="10">
+    </marquee>
+    <script>
+        rawDatDp = document.getElementById("serialData");
+    </script>
+<!--=============================================================================================================-->
+    
+  </div><hr>
+</body>
+
+</html>

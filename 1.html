@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <script type="text/javascript" src="./js/echarts/echarts.min.js"></script>
+  <meta charset="utf-8" />
+  <title>生理信号采集</title>
+  <script>
+    window.onload = function isSerialAv() {
+      if ("serial" in navigator) {console.log("Web Serial API is supported");
+      }else{ alert("Web Serial API 不被支持,请确认使用Chrome内核的浏览器"); }
+    };
+    
+    function stringToHex(str){
+      var val="";
+      for(let i = 0; i < str.length; i++){
+        if(val == ""){val = str.charCodeAt(i).toString(16);
+        }else{val += "," + str.charCodeAt(i).toString(16);}
+      }return val;}
+  </script>
+</head>
+
+<body>
+  <h1>血氧模块</h1>
+  <div id="comReader">
+    <h1>USB串口读取</h1>
+
+    <script>//全局变量和数据结构
+      class rtData {//实时数据包类
+        constructor(rawData) {
+        this.header = rawData[0];
+        this.acData = rawData.slice(1,64).map(
+        function(i){return i-128});
+        this.heartRate=rawData[65];
+        this.spo2=rawData[66];
+        this.bk=rawData[67];
+        this.rsv=rawData.slice(68,75);
+        }
+      }
+
+      var isRreading = false;//读取控制
+      var HRdata = [];// 定义一个数组变量data，用来存储心率数据，初始为空
+      var doShift = true;//是否只展示后面一段定长的数据(而非全部采集数据)
+      var displaysize=256;//定长数据量
+    </script>
+    
+    <!--数据读取控制按钮-->
+    <button onclick="readFromSerialPort()">读取</button>
+    <button onclick="stopSerialPort()">停止</button>
+    <button onclick="clc()">清除记录数据</button>
+    <button onclick="cls()">清屏(串口)</button>
+    <button onclick="toggleShift()">toggleShift</button><wbr>
+    <input type="range" id="dpsize" name="dpsize" value="256" min="64" max="512" step="64" />
+    <label for="volume">Display Size: </label><span id="showSize"></span>
+    <script>
+        var slider = document.getElementById("dpsize");
+        var dpSize = document.getElementById("showSize");
+        dpSize.innerHTML = slider.valueAsNumber;
+        slider.oninput = function() {
+          displaysize = this.value;
+          dpSize.innerHTML = slider.valueAsNumber;
+        }
+    </script>
+<!--=============================================================================================================-->
+    <!--脉搏波图表-->
+    <div ><b>血氧</b><span id="spO2">-1</span><br/><b>心率</b><span id="hRdp">-1</span></div>
+    <script>
+        var spO2Obj=document.getElementById("spO2");
+        var htRtObj=document.getElementById("hRdp");
+    </script>
+    <div id="chart" style="width: 90%;height:400px;"></div>
+<!--=============================================================================================================-->
+    <script>
+      var chart = echarts.init(document.getElementById('chart'));
+      // 设置图表的基本配置
+      var option = {
+        animation:false,
+        title: {text:'实时脉搏波数据'},
+        tooltip: {trigger:'axis'},
+        legend: {data: ['脉搏波']},
+        xAxis: {data:[]},
+        yAxis: {type:'value',min:-128,max:127},
+        series: [{name:'值',type:'line',data:[]}]
+      };
+      // 设置图表的初始数据
+      chart.setOption(option);
+      
+      // 定义一个函数updateData，用来每隔0.128秒从heartrate[]中获取
+      // 最新的心率值，并追加到data中，同时更新图表的数据和视图
+      function updateData() {
+        let dpHRdata=[];
+        let dpSec=[];
+        for(let i=0;i<HRdata.length;i++){dpSec.push(i/50);}
+        if(doShift){
+            let start=HRdata.length-displaysize;
+            if(start<0){ start=0; }
+            dpHRdata=HRdata.slice(start,HRdata.length);
+            dpSec=dpSec.slice(start,HRdata.length);
+        }
+        else{ dpHRdata=HRdata; }
+        // 更新图表的x轴和y轴的数据
+        chart.setOption({
+          xAxis:{data: dpSec},
+          series: [{data: dpHRdata}]
+        });
+      }
+      // 每过一小段时间 调用updateData函数，更新显示实时心率数据
+      flashData = setInterval(updateData, 128);//1280max,太小容易卡
+      
+      window.addEventListener('resize', chart.resize);
+    </script>
+    <hr>
+<!--=============================================================================================================-->
+    <marquee id="serialData" direction="up" behavior="slide" scrollamount="30" 
+    height="120" bgcolor="#EEEEEE" hspace="10" vspace="10">
+    </marquee>
+    <script>
+    var rawHR = document.getElementById("serialData");
+    function toggleShift(){doShift =! doShift;}
+    function clc(){HRdata=[];}
+    function cls(){
+      var div = document.getElementById("serialData");
+      spO2Obj.innerHTML=-1;
+      HtRtObj.innerHTML=-1;
+      div.innerHTML = "<h5></h5>";
+    }
+    function stopSerialPort(){isRreading = false;}
+    //----重头戏---------------------------------------------------------------//
+    async function readFromSerialPort(){
+      var serial = navigator.serial;//从选择列表获取串口对象
+      var port = await serial.requestPort();//打开串口
+      isRreading = true;
+      //设置串口参数
+      await port.open({ 
+          baudRate:38400, 
+          dataBits:8,
+          parity:"none", 
+          stopBits:1,
+          bufferSize:8192
+      });
+      //发送数据0x8A
+      var writer = port.writable.getWriter();
+      await writer.write(Uint8Array.of(0x8A));
+      await writer.close();
+      //创建数据流读取器
+      var reader = port.readable.getReader();
+      //读取数据，直到isRreading被置为false
+      var l76data = new Array();
+      var d76l = 0;
+      
+      while(isRreading){
+        var { value, done } = await reader.read();
+        if (value) {
+          for(var i=0;i<value.length;i++)
+            {l76data[d76l+i]=parseInt(value[i]);};
+          d76l+=value.length;
+        }else{continue;}
+        if(d76l>=76){
+          let tPdata = new rtData(l76data);
+          d76l=0;l76data=[];
+          HRdata.push(...tPdata.acData);
+          //显示心率，血氧
+          spO2Obj.innerHTML=tPdata.heartRate;
+          htRtObj.innerHTML=tPdata.spo2;
+          
+          var p = document.createElement("plaintext");//新建一个p标签
+          p.innerHTML = tPdata.acData.join("\t");//将数据显示在p标签上
+          rawHR.appendChild(p);//将p标签添加到div上
+        }
+      };
+      //发送数据0x88，结束读取
+      var writer = port.writable.getWriter();
+      await writer.write(Uint8Array.of(0x88));
+      await writer.close();
+      reader.releaseLock();//释放资源，关闭串口
+      await port.close();
+    }
+  </script>
+  </div><hr>
+  
+</body>
+
+</html>

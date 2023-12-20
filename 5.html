@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <script type="text/javascript" src="./js/echarts/echarts.min.js"></script>
+  <meta charset="utf-8" />
+  <title>生理信号采集</title>
+  <script>
+    window.onload = function isSerialAv() {
+      if ("serial" in navigator) {console.log("Web Serial API is supported");}
+      else{ alert("Web Serial API 不被支持,请确认使用Chrome内核的浏览器"); }};
+
+    function stringToHex(str){
+      let val="";
+      for(let i = 0; i < str.length; i++){
+        if(val == ""){val = str.charCodeAt(i).toString(16);
+        }else{val += "," + str.charCodeAt(i).toString(16);}
+      }return val;}
+  </script>
+</head>
+
+<body>
+  <h1>EEG</h1>
+  <div id="comReader">
+    <h3>USB串口读取</h3>
+
+    <script>
+    //全局变量和数据结构
+      var isRreading = false;//读取控制
+      var doShift = true;//是否只展示后面一段定长的数据(而非全部采集数据)
+      var displaysize=256;//定长数据量
+      
+      var comQueue = [];//串口数据缓存
+      var pData = [];// 定义一个数组变量data，用来存储数据，初始为空
+      
+      var delta=[];var theta=[];
+      var lowAlpha=[];var highAlpha=[];
+      var lowBeta=[];var highBeta=[];
+      var lowGamma=[];var midGamma=[];
+      //还有注意度和放松度
+      
+      const mxMem=65536;
+      function MemSaver(){
+        if(comQueue.length>mxMem){comQueue=[];console.log("queueCleared");}
+        if(pData>mxMem){pData=[];}
+      }
+      //memCtrl=setInterval(MemSaver,100);
+      
+      function bigPkgProcesseer(data){//console.log(data);
+          sigQ.innerHTML=data[1];
+          delta.push(data[4]*0x10000+data[5]*0x100+data[6]);
+          theta.push(data[7]*0x10000+data[8]*0x100+data[9]);
+          lowAlpha.push(data[10]*0x10000+data[11]*0x100+data[12]);
+          highAlpha.push(data[13]*0x10000+data[14]*0x100+data[15]);
+          lowBeta.push(data[16]*0x10000+data[17]*0x100+data[18]);
+          highBeta.push(data[19]*0x10000+data[20]*0x100+data[21]);
+          lowGamma.push(data[22]*0x10000+data[23]*0x100+data[24]);
+          midGamma.push(data[25]*0x10000+data[26]*0x100+data[27]);
+          att.innerHTML=data[29];medi.innerHTML=data[31];
+          return 1;
+      }
+      
+      const minPacksize=64;
+      function stackReader(){//把数据从串口数据队列搬到处理后的数据队列
+        //if(comQueue.length<minPacksize){return;}//不够长就呆会再试
+        
+        //let ax=0x01;
+        //while(ax!=0xAA){ax=comQueue.shift();console.log("ShiftingToPkgStart");console.log(ax);}//1:找到最近的数据包头;
+        while(comQueue.shift()!=0xAA){console.log("ShiftingToPkgStart");}
+        if(comQueue.shift()==0xAA){
+          let packsize = comQueue.shift();
+          if(packsize==4){//小包
+            if( comQueue.shift()==0x80&&
+                comQueue.shift()==0x02){
+              let xxHigh = comQueue.shift();
+              let xxLow = comQueue.shift();
+              if( (((0x82 + xxHigh + xxLow) ^ 0xFFFFFFFF) & 0xFF) == comQueue.shift())
+                {   
+                    let tmp=-32768;
+                    tmp=xxHigh*0x100+xxLow;
+                    //console.log(tmp);
+                    if(tmp>32768){tmp-=65536;}
+                    //console.log(tmp);
+                    pData.push(tmp);
+                }
+              else{console.log("SmallpkgChecckSumERR");}//pData.push(-1);}//push(-1)不建议实装
+            }else{console.log("SmallDataPackERR");}
+          }else{//大包
+            let packCont=[];
+            let sum=0;
+            for(let i = 0;i<packsize;i++){
+              let t = comQueue.shift();
+              packCont.push(t);
+              sum += t;
+            };sum = (sum^0xFFFFFFFF)&0xFF;
+            if(sum!=comQueue.shift()){console.log("BigpkgChecckSumERR");}
+            else{bigPkgProcesseer(packCont);}
+          }
+        }else{console.log("unExpectedData");}
+      }
+      function Qsolver(){
+        while(comQueue.length>minPacksize){stackReader();}}
+      comQueue_Reader = setInterval(Qsolver,100);//10ms
+    </script>
+    
+    <div class="Controller">
+        <!--数据读取控制按钮-->
+        <button onclick="readFromSerialPort()">读取</button>
+        <script>//--------------------------------接受串口数据--------------------------------------//
+            async function readFromSerialPort() {
+                var serial = navigator.serial;  //从选择列表获取串口对象
+                var port = await serial.requestPort();//打开串口
+                isRreading = true;
+                await port.open({baudRate: 57600,bufferSize: 512});//设置串口参数
+                var reader = port.readable.getReader();//创建数据流读取器
+                //读取数据，直到isRreading被置为false
+                while (isRreading) {//把接收到的数据压进队列
+                  var { value, done } = await reader.read();
+                  if (value) { //comQueue = comQueue.concat(value);
+                    for(let i=0;i<value.length;i++){ comQueue.push(value[i]);}
+                    //stackReader();stackReader();stackReader();
+                  }
+                };
+                reader.releaseLock();//释放资源，关闭串口
+                await port.close();
+              }
+        </script>
+
+        <button onclick="stopSerialPort()">停止</button>
+        <button onclick="clc()">清除记录数据</button>
+        <!--<button onclick="cls()">清屏(串口)</button>-->
+        <button onclick="toggleShift()">toggleShift</button><wbr>
+        <script>
+            var rawDatDp;// = document.getElementById("serialData");//在下面，用于显示原始数据
+            function toggleShift(){doShift =! doShift;}
+            function clc(){ pData=[];delta=[];theta=[];
+            lowAlpha=[];highAlpha=[];lowBeta=[];highBeta=[];lowGamma=[];midGamma=[];}
+            //function cls(){ rawDatDp.innerHTML = "";}
+            function stopSerialPort(){isRreading = false;}
+        </script>
+
+        <input type="range" id="dpsize" name="dpsize" value="256" min="64" max="512" step="64" />
+        <label for="volume">Display Size: </label><span id="showSize"></span>
+        <script>
+            var slider = document.getElementById("dpsize");
+            var dpSize = document.getElementById("showSize");
+            dpSize.innerHTML = slider.valueAsNumber;
+            slider.oninput = function() {
+              displaysize = this.value;
+              dpSize.innerHTML = slider.valueAsNumber;
+            }
+        </script>
+    </div>
+    <table class="dp"><tr>
+      <th>信号质量</th><td id="ssss">-1</td>
+      <th>专注度</th><td id="att">-1</td>
+      <th>放松度</th><td id="medi">-1</td>
+    </tr></table>
+    <script>
+        var sigQ=document.getElementById("ssss");
+        var att=document.getElementById("att");
+        var medi=document.getElementById("medi");
+    </script>
+    
+<!--=============================================================================================================-->
+    <div class="chartDisplayer">
+        <!--脉搏波图表-->
+        <div id="chartO" style="width: 90%;height:200px;"></div>
+        
+        <div id="chartD" style="width: 90%;height:200px;"></div>
+        <div id="chartT" style="width: 90%;height:200px;"></div>
+        
+        <div id="chartLA" style="width: 90%;height:200px;"></div>
+        <div id="chartHA" style="width: 90%;height:200px;"></div>
+        
+        <div id="chartLB" style="width: 90%;height:200px;"></div>
+        <div id="chartHB" style="width: 90%;height:200px;"></div>
+        
+        <div id="chartLG" style="width: 90%;height:200px;"></div>
+        <div id="chartMG" style="width: 90%;height:200px;"></div>
+        <script>
+          var chartO = echarts.init(document.getElementById('chartO'));
+          
+          var chartD = echarts.init(document.getElementById('chartD'));
+          var chartT = echarts.init(document.getElementById('chartT'));
+          
+          var chartLA = echarts.init(document.getElementById('chartLA'));
+          var chartHA = echarts.init(document.getElementById('chartHA'));
+          
+          var chartLB = echarts.init(document.getElementById('chartLB'));
+          var chartHB = echarts.init(document.getElementById('chartHB'));
+          
+          var chartLG = echarts.init(document.getElementById('chartLG'));
+          var chartMG = echarts.init(document.getElementById('chartMG'));
+          
+          function getOpt(name){
+             return {// 设置图表的基本配置
+                animation: false,
+                title: { text: name },
+                tooltip: { trigger: 'axis' },
+                legend: { data: [name] },
+                xAxis: { data: [] },
+                yAxis: { type: 'value', min: 0, max: 0x2FFFFF },
+                series: [{ name: '值', type: 'line', data: [] }]
+              };
+          }
+          
+          chartO.setOption({// 设置图表的基本配置
+                animation: false,
+                title: { text: '原始脑波' },
+                tooltip: { trigger: 'axis' },
+                legend: { data: ['原始脑波'] },
+                xAxis: { data: [] },
+                yAxis: { type: 'value', min: -2048, max: 2047 },
+                series: [{ name: '值', type: 'line', data: [] }]
+              });// 设置图表的初始数据
+          
+          const wNames=["Delta","Theta","LowAlpha","HighAlpha","LowBeta","HighBeta","LowGamma","MidGamma"];
+          chartD.setOption(getOpt(wNames[0]));
+          chartT.setOption(getOpt(wNames[1]));
+          chartLA.setOption(getOpt(wNames[2]));
+          chartHA.setOption(getOpt(wNames[3]));
+          chartLB.setOption(getOpt(wNames[4]));
+          chartHB.setOption(getOpt(wNames[5]));
+          chartLG.setOption(getOpt(wNames[6]));
+          chartMG.setOption(getOpt(wNames[7]));
+          // 定义一个函数updateData，用来每隔0.1秒从更新图表的数据和视图
+          const sampRate = 128;
+          function updateData() {
+            let dpData=[];
+            let dpSec=[];let dpN=[];
+            /*
+            let dpDelta=[];let dpTheta=[];
+            let dpLA=[];let dpHA=[];
+            let dpLB=[];let dpHB=[];
+            let dpLG=[];let dpMG=[];
+            */
+            for(let i=0;i<pData.length;i++){dpSec.push(i/sampRate);}
+            for(let i=0;i<delta.length;i++){dpN.push(i);}
+            //dpData=FILTER(dpData);
+            if(doShift){
+                let start=pData.length-displaysize;
+                if(start<0){ start=0; }
+                dpData=pData.slice(start,pData.length);
+                dpSec=dpSec.slice(start,pData.length);
+            }
+            else{ dpData = pData; }
+            
+            // 更新图表的x轴和y轴的数据
+            chartO.setOption({xAxis:{data: dpSec},series: [{data: dpData}]});
+            chartD.setOption({xAxis:{data: dpN},series: [{data: delta}]});
+            chartT.setOption({xAxis:{data: dpN},series: [{data: theta}]});
+            chartLA.setOption({xAxis:{data: dpN},series: [{data: lowAlpha}]});
+            chartHA.setOption({xAxis:{data: dpN},series: [{data: highAlpha}]});
+            chartLB.setOption({xAxis:{data: dpN},series: [{data: lowBeta}]});
+            chartHB.setOption({xAxis:{data: dpN},series: [{data: highBeta}]});
+            chartLG.setOption({xAxis:{data: dpN},series: [{data: lowGamma}]});
+            chartMG.setOption({xAxis:{data: dpN},series: [{data: midGamma}]});
+          }
+          // 每过一小段时间 调用updateData函数，更新显示实时心率数据
+          flashData = setInterval(updateData, 100);//100ms
+          window.addEventListener('resize', chartO.resize);
+          window.addEventListener('resize', chartD.resize);
+          window.addEventListener('resize', chartT.resize);
+          window.addEventListener('resize', chartLA.resize);
+          window.addEventListener('resize', chartHA.resize);
+          window.addEventListener('resize', chartLB.resize);
+          window.addEventListener('resize', chartHB.resize);
+          window.addEventListener('resize', chartLG.resize);
+          window.addEventListener('resize', chartMG.resize);
+        </script>
+    </div><hr>
+<!--=============================================================================================================-->
+
+<!--=============================================================================================================-->
+    
+  </div><hr>
+</body>
+
+</html>

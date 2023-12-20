@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="utf-8">
+    <title>读取本地文件</title>
+    <script>
+    function getCol(matrix, col){
+        var column = [];
+        for(var i=0; i<matrix.length; i++){
+            column.push(matrix[i][col]);
+    }return column;}
+    </script>
+</head>
+<body>
+  <div id="contReader">
+    <h1>raw txt FileReader</h1>
+    <input type="file" id="fileInput" accept="*">
+    <pre id="fileContent"></pre>
+    <script>
+      document.getElementById('fileInput').addEventListener(
+        'change', function (event) {
+          var file = event.target.files[0];
+          var reader = new FileReader();
+          reader.onload = function (event) {
+            document.getElementById('fileContent').textContent = event.target.result;
+          };
+          reader.readAsText(file);
+        });
+    </script>
+  </div><hr>
+  
+  <div id="excelRdr">
+    <script src="./js/xlsx/xlsx.mini.min.js"></script>
+    <h1>excel reader</h1>
+    <input type="file" id="excelFile" multiple />
+    <div id="exTable"></div>
+    <script>
+      var whereTable = "#exTable"
+      // 读取本地excel文件，读取Excel文件对象
+      function readWorkbookFromLocalFile(file, callback) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          var data = e.target.result;
+          var workbook = XLSX.read(data, {type: 'binary'});
+          console.log(workbook);
+          if(callback) callback(workbook);
+        };
+        reader.readAsBinaryString(file);
+      }
+      // 转成csv 要注意Execel表格内容不能包含英文的,不然解析出来的数据格式会有问题
+      function readWorkbook(workbook,_sheet) {
+        if(!_sheet){var _sheet=0;}
+        var sheetNames = workbook.SheetNames; // 工作表名称集合
+        var worksheet = workbook.Sheets[sheetNames[_sheet]]; // 我们默认只读取第一张sheet
+        var csv = XLSX.utils.sheet_to_csv(worksheet);
+        //console.log(csv);
+        var rows = csv.split('\n'); // 转化为数组
+        //rows.pop(); // 最后一行没用的
+        //console.log(rows);  // 打印输出的数组
+        let table = ``;
+        rows.forEach(v => {
+          let tr = ``;
+          let td = ``;
+          v.split(',').forEach(item => {
+            td += `<td>${item}</td>`
+          });
+          tr = `<tr>${td}</tr>`;
+          table += tr;
+        });
+        table = `<table>${table}</table>`;
+        document.querySelector(whereTable).innerHTML = table; // 显示table表格
+        return csvToArray(csv,0,0);//withoutHeader,as array.
+      }
+      // 将CSV数据转换为数组
+      function csvToArray(csvData,wizHeader,asArr) {
+      const lines = csvData.split('\n');
+      if(wizHeader){
+        const headers = lines[0].split(',');
+        const rows = lines.slice(1).map(line => line.split(','));
+        if(asArr){
+          const array = rows.map(row => {
+          var obj =  new Array();
+          row.forEach((value, index) => {
+            obj.push(Number(value));
+          });return obj;
+        });return array;}
+        else{
+          const array = rows.map(row => {
+            const obj = {};
+            row.forEach((value, index) => {
+              obj[headers[index]] = Number(value);
+            });return obj;
+          });return array;}
+        }else{
+        const rows = lines.map(line => line.split(','));
+        const array = rows.map(row => {
+          var obj =  new Array();
+          row.forEach((value, index) => {obj.push(Number(value));});
+          return obj;});
+        return array;}
+      }
+    </script>
+    <script>
+      var excelData;
+      document.querySelector('#excelFile').onchange = function (e) {
+        let file = e.target.files[0];//first sheet
+        readWorkbookFromLocalFile(file, function(workbook) {
+          excelData=readWorkbook(workbook);
+        });}
+    </script>
+  </div><hr>
+</body>
+</html>

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>USB Serial Port Reader</title>  
+</head>  
+<body>  
+  <button onclick="readFromSerialPort()">Read from Serial Port</button>  
+  <p id="serialData">data here</p>
+    <script>
+    if (!navigator.serial) {
+        alert("请直接下载本网页使用或配置ssl!");
+    } 
+    else {
+    // 监听设备连接
+    navigator.serial.addEventListener("connect", (event) => {
+      console.log('设备已连接');
+    });
+    // 监听设备断开
+    navigator.serial.addEventListener("disconnect", (event) => {
+      console.log('设备已断开');
+    });
+    async function readFromSerialPort() {  
+      try {  
+        //获取串口对象，serial.requestPort()是一个异步函数，返回一个串口对象
+        const port = await navigator.serial.requestPort();
+        //serial.getPorts是一个异步函数，返回一个数组，包含所有已连接的串口对象
+        //const ports = await navigator.serial.getPorts();
+        //打开串口，返回一个promise对象
+        port.setTimeout(200);
+        await port.open({ baudRate: 38400 });
+        //创建一个文本流写入器
+        const writer = port.writable.getWriter();
+        //串口发送16进制数0x8A，让设备进入读取模式
+        await writer.write(Uint8Array.of(0x8A));
+        //创建一个TextDecoder对象，用于解码串口数据
+        const decoder = new TextDecoderStream();
+        //将串口数据流转换为文本流
+        const inputDone = port.readable.pipeTo(decoder.writable);
+        //创建一个文本流读取器
+        const inputStream = decoder.readable;
+        //创建一个文本流写入器
+        const reader = inputStream.getReader();
+        //读取文本流中的数据
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            // Allow the serial port to be closed later.
+            reader.releaseLock();
+            break;
+          }
+          //将16进制value转换为十六进制数字字符串
+          str = value.toString(16);
+          //将读取到的数据显示在网页上
+          document.getElementById("serialData").innerHTML += str;
+        }
+      }
+      catch (error) {
+        console.error("There was an error reading data from the serial port:", error);
+      }
+    };
+    async function isSerialAv(){
+      if ("serial" in navigator) {
+      // The Web Serial API is supported.
+      console.log("Web Serial API is supported");
+      const port = await navigator.serial.requestPort();
+      const ports = await navigator.serial.getPorts();
+      }
+      else {
+      // The Web Serial API is not supported.
+      console.log("Web Serial API is not supported");
+      }
+    };
+    }
+  </script>  
+</body>  
+</html>
